@@ -21,6 +21,9 @@ STOCK_SYSTEM = (
     "你是严谨的技术分析顾问, 精通艾略特波浪理论与缠论。基于给定的结构化数据给出当日操作建议。\n"
     "分析时必须: 1)用缠论框架解读中枢位置/三类买卖点/背驰; 2)用波浪理论判断当前可能处于第几浪, "
     "给出斐波那契关键位; 3)结合大盘(上证/纳指)结构与当日新闻情绪; 4)给出具体可执行的挂单点位。\n"
+    "风控先验(必须体现在建议中): 单笔风险不超过总资金2%; 趋势未确认不重仓; "
+    "反转形态必须结合位置(高位看跌形态/低位看涨形态才有效); 放量突破才可信, 缩量新高警惕背离; "
+    "亏损仓位禁止摊平加仓, 加仓只加盈利仓。\n"
     '严格输出JSON: {"action": "清仓/减仓/持有/加仓/买入/观望之一", "position_pct": 建议仓位0-100, '
     '"wave_view": "波浪视角80字内", "chan_view": "缠论视角80字内", "news_view": "消息面40字内", '
     '"orders": [{"side": "买入或卖出", "price": 数字, "reason": "30字内"}], '
@@ -84,6 +87,60 @@ def advise_stock(market, code, refresh=False):
               "quote": quote, "advice": advice,
               "related_news": payload["相关新闻"],
               "disclaimer": "结构化信号+模型研判, 仅供参考, 不构成投资建议"}
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(cp, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=1)
+    return result
+
+
+DEBATE_BULL = (
+    "你是多头研究员。仅基于给定数据提出3-5条做多论据, 每条不超过40字, "
+    "必须引用具体的结构位/数值(中枢/斐波位/背驰/量价/新闻), 禁止空话。"
+    '严格输出JSON: {"points": ["论据1", ...]}'
+)
+DEBATE_BEAR = (
+    "你是空头研究员。仅基于给定数据提出3-5条做空/回避论据, 每条不超过40字, "
+    "必须引用具体的结构位/数值(中枢/斐波位/背驰/量价/新闻), 禁止空话。"
+    '严格输出JSON: {"points": ["论据1", ...]}'
+)
+DEBATE_JUDGE = (
+    "你是研究主管, 精通缠论与波浪理论。评判多空双方论据的质量与证据强度, 给出裁决。"
+    '严格输出JSON: {"verdict": "偏多/偏空/中性", "confidence": 0到100整数, '
+    '"key_reason": "60字内裁决核心依据", "action_hint": "40字内操作提示", '
+    '"invalidation": "40字内: 什么条件出现则本裁决作废"}\n'
+    "注意: 哪方论据更贴合结构事实就偏向哪方, 不和稀泥; 语气克制。"
+)
+
+
+def debate(market, code, refresh=False):
+    """多空辩论: 牛熊双研究员各自陈词 -> 主管裁决(借鉴 TradingAgents 机制)。"""
+    cp = os.path.join(CACHE_DIR, f"debate_{market}_{code}_{date.today().isoformat()}.json")
+    if not refresh and os.path.exists(cp):
+        with open(cp, encoding="utf-8") as f:
+            return json.load(f)
+
+    k = market_service.get_kline(market, code)
+    ctx = market_service.index_context()
+    news = news_service.get_analyzed()
+    related = news_service.search(code, news)[:5]
+    payload = {
+        "股票": {"market": market, "code": code, "近20根K线": k["bars"][-20:],
+                "缠论结构": _chan_brief(k["chan"])},
+        "大盘": {"上证": _chan_brief(ctx["sh_chan"]), "纳指": _chan_brief(ctx["ixic_chan"])},
+        "相关新闻": [{"title": n["title"][:60], "impact": n["impact"]} for n in related],
+    }
+    pj = json.dumps(payload, ensure_ascii=False)
+    bull = llm.chat_json(pj, system=DEBATE_BULL, model=llm.SMART_MODEL, max_tokens=1200)
+    bear = llm.chat_json(pj, system=DEBATE_BEAR, model=llm.SMART_MODEL, max_tokens=1200)
+    judge = llm.chat_json(
+        json.dumps({"数据": payload, "多头论据": bull.get("points", []),
+                    "空头论据": bear.get("points", [])}, ensure_ascii=False),
+        system=DEBATE_JUDGE, model=llm.SMART_MODEL, max_tokens=1000)
+    result = {"date": date.today().isoformat(), "market": market, "code": code,
+              "last_close": k["chan"]["last_close"],
+              "bull": bull.get("points", []), "bear": bear.get("points", []),
+              "judge": judge,
+              "disclaimer": "多空辩论为模型研判, 仅供参考, 不构成投资建议"}
     os.makedirs(CACHE_DIR, exist_ok=True)
     with open(cp, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=1)

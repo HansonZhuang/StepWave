@@ -57,6 +57,16 @@
   .quotebar { display:flex; gap:18px; flex-wrap:wrap; margin-bottom:10px;
               font-size:13px; }
   .orders li { margin-left:18px; }
+  #daybar { max-width:1200px; margin:10px auto 0; padding:8px 16px;
+            background:var(--card); border:1px solid var(--line); border-radius:8px;
+            display:flex; gap:16px; flex-wrap:wrap; font-size:13px; align-items:center; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%;
+         margin-right:5px; vertical-align:middle; }
+  .debate-cols { display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; }
+  .debate-cols > div { flex:1; min-width:260px; background:#10141c;
+                       border:1px solid var(--line); border-radius:8px; padding:10px; }
+  .bullside { border-left:3px solid var(--up) !important; }
+  .bearside { border-left:3px solid var(--down) !important; }
 </style>
 </head>
 <body>
@@ -65,6 +75,9 @@
   <span class="dim" id="today"></span>
   <span class="dim">数据: 新浪/财联社/东财公开接口 · 分析: 缠论+波浪+LLM · 仅供参考，不构成投资建议</span>
 </header>
+<div id="daybar">
+  <span class="dim">今日摘要加载中…</span>
+</div>
 <main>
 
 <!-- ① 新闻 -->
@@ -121,9 +134,11 @@
       </select>
       <input id="qcode" placeholder="输入代码: 如 600519 / 00700 / NVDA">
       <button onclick="queryStock()">分析该股</button>
-      <span class="dim" style="align-self:center">拉取近18个月K线 → 缠论/波浪结构 → 结合新闻与大盘出当日建议（约30-60秒）</span>
+      <button onclick="debateStock()" style="background:#7a4c2a">多空辩论</button>
+      <span class="dim" style="align-self:center">分析约30-60秒；多空辩论=牛熊双研究员陈词+主管裁决(约1-2分钟)</span>
     </div>
     <div id="queryResult" style="margin-top:12px"></div>
+    <div id="debateResult" style="margin-top:12px"></div>
   </div>
 </section>
 <!-- ⑤ 持仓顾问 -->
@@ -216,6 +231,8 @@ async function loadNews(refresh){
   $('newsCats').innerHTML = '<div class="loading">加载分类新闻中…(首次LLM分析约1分钟)</div>';
   try{
     NEWS = await jget('/api/news' + (refresh ? '?refresh=1' : ''));
+    DAY.newsN = NEWS.n_items;
+    renderDaybar();
     const s = NEWS.summary || {};
     $('newsSummary').innerHTML =
       `<div><span class="badge">当日研判</span><b class="stance-${esc(s.stance)}">${esc(s.stance)}</b>
@@ -267,6 +284,11 @@ async function drawStock(market, code, targetChart){
     c.hideLoading();
     const dates = d.bars.map(b=>b.date);
     const kdata = d.bars.map(b=>[b.open,b.close,b.low,b.high]);
+    const closes = d.bars.map(b=>b.close);
+    const ma = n => closes.map((_,i)=> i<n-1 ? null :
+      +(closes.slice(i-n+1,i+1).reduce((a,b)=>a+b,0)/n).toFixed(2));
+    const vols = d.bars.map((b,i)=>({value:b.volume,
+      itemStyle:{color: b.close>=b.open ? 'rgba(224,88,88,.75)' : 'rgba(60,179,113,.75)'}}));
     const strokeLine = (d.chan.strokes||[]).map(p=>[p.dt, p.price]);
     const markAreas = (d.chan.zhongshu||[]).map(z=>[
       {xAxis:z.start_dt, yAxis:z.zd, itemStyle:{color:'rgba(76,141,255,.14)',
@@ -278,12 +300,21 @@ async function drawStock(market, code, targetChart){
     c.setOption({
       backgroundColor:'transparent',
       tooltip:{trigger:'axis', axisPointer:{type:'cross'}},
-      grid:{left:60,right:20,top:20,bottom:60},
-      xAxis:{type:'category', data:dates, axisLine:{lineStyle:{color:'#555'}}},
-      yAxis:{scale:true, axisLine:{lineStyle:{color:'#555'}},
-             splitLine:{lineStyle:{color:'#222835'}}},
-      dataZoom:[{type:'inside',start:55,end:100},{type:'slider',start:55,end:100,
-        backgroundColor:'#171b24', dataBackground:{areaStyle:{color:'#243049'}}}],
+      legend:{data:['MA5','MA20','MA60','笔'], textStyle:{color:'#8a93a5'},
+              top:0, right:10},
+      axisPointer:{link:[{xAxisIndex:'all'}]},
+      grid:[{left:60,right:20,top:24,height:'56%'},
+            {left:60,right:20,top:'72%',height:'16%'}],
+      xAxis:[{type:'category', data:dates, axisLine:{lineStyle:{color:'#555'}}},
+             {type:'category', gridIndex:1, data:dates, axisLabel:{show:false},
+              axisLine:{lineStyle:{color:'#555'}}}],
+      yAxis:[{scale:true, axisLine:{lineStyle:{color:'#555'}},
+              splitLine:{lineStyle:{color:'#222835'}}},
+             {gridIndex:1, scale:true, axisLabel:{show:false},
+              splitLine:{show:false}}],
+      dataZoom:[{type:'inside', xAxisIndex:[0,1], start:55, end:100},
+                {type:'slider', xAxisIndex:[0,1], start:55, end:100, bottom:0,
+                 backgroundColor:'#171b24', dataBackground:{areaStyle:{color:'#243049'}}}],
       series:[
         {name:'K线', type:'candlestick', data:kdata,
          itemStyle:{color:'#e05858',color0:'#3cb371',
@@ -291,14 +322,21 @@ async function drawStock(market, code, targetChart){
          markArea:{silent:true, data:markAreas},
          markPoint:{data:markPoints, symbolSize:46,
                     label:{fontSize:10, color:'#000'}}},
+        {name:'MA5', type:'line', data:ma(5), symbol:'none',
+         lineStyle:{width:1, color:'#e8c266'}},
+        {name:'MA20', type:'line', data:ma(20), symbol:'none',
+         lineStyle:{width:1, color:'#4c8dff'}},
+        {name:'MA60', type:'line', data:ma(60), symbol:'none',
+         lineStyle:{width:1, color:'#b06cd9'}},
         {name:'笔', type:'line', data:strokeLine, symbol:'circle', symbolSize:5,
          lineStyle:{color:'#d9a441', width:1.4}, itemStyle:{color:'#d9a441'},
-         connectNulls:true}]
+         connectNulls:true},
+        {name:'成交量', type:'bar', xAxisIndex:1, yAxisIndex:1, data:vols}]
     }, true);
     if(!targetChart){
       const z = (d.chan.zhongshu||[]).slice(-1)[0];
       $('chartMeta').textContent =
-        `数据源:${d.source} · ${d.bars.length}根K线 · 蓝框=缠论中枢` +
+        `数据源:${d.source} · ${d.bars.length}根K线 · 蓝框=缠论中枢 · 金线=笔 · 下副图=成交量` +
         (z ? ` · 最近中枢[${z.zd}, ${z.zg}]` : '') +
         (d.chan.divergence ? ` · ⚠ ${d.chan.divergence}` : '');
     }
@@ -342,6 +380,8 @@ async function loadOverview(){
   try{
     const d = await jget('/api/overview');
     const o = d.overview;
+    DAY.ov = {stance:o.stance, position_pct:o.position_pct, clear_all:o.clear_all};
+    renderDaybar();
     $('overview').innerHTML =
       `<div><span class="badge">大盘总研判</span>
         <b class="stance-${esc(o.stance)}">${esc(o.stance)}</b>
@@ -354,6 +394,25 @@ async function loadOverview(){
        <div class="disclaimer">${esc(d.disclaimer)}</div>`;
   }catch(e){ $('overview').innerHTML = '总研判生成失败: ' + esc(e.message); }
 }
+/* ---------- 今日摘要条 ---------- */
+const DAY = {};
+function renderDaybar(){
+  const stanceColor = {'偏多':'var(--up)','中性':'#d9a441','偏空':'var(--down)'};
+  const parts = [];
+  if(DAY.ov){
+    parts.push(`<span><span class="dot" style="background:${stanceColor[DAY.ov.stance]||'#888'}"></span>
+      大盘 <b class="stance-${esc(DAY.ov.stance)}">${esc(DAY.ov.stance)}</b> · 建议总仓位 <b>${DAY.ov.position_pct}%</b>
+      ${DAY.ov.clear_all ? ' · <b style="color:var(--down)">⚠ 清仓提示</b>' : ''}</span>`);
+  }
+  if(DAY.paper){
+    const cls = DAY.paper.diff >= 0 ? 'num-up' : 'num-down';
+    parts.push(`<span>模拟盘 ${DAY.paper.days}日 · 建议 vs 不动 <b class="${cls}">${DAY.paper.diff>0?'+':''}${DAY.paper.diff}</b> · ${esc(DAY.paper.gate)}</span>`);
+  }
+  if(DAY.newsN) parts.push(`<span>今日新闻 <b>${DAY.newsN}</b> 条</span>`);
+  parts.push(`<span class="dim" style="margin-left:auto">更新 ${new Date().toLocaleTimeString('zh-CN')}</span>`);
+  $('daybar').innerHTML = parts.join('');
+}
+
 async function queryStock(){
   const m = $('qmarket').value, c = $('qcode').value.trim();
   if(!c) return;
@@ -379,6 +438,32 @@ async function queryStock(){
   }catch(e){ $('queryResult').innerHTML = '分析失败: ' + esc(e.message); }
 }
 $('qcode').addEventListener('keydown', e => { if(e.key==='Enter') queryStock(); });
+
+async function debateStock(){
+  const m = $('qmarket').value, c = $('qcode').value.trim();
+  if(!c) return;
+  $('debateResult').innerHTML = '<div class="loading">多空辩论进行中（牛熊双研究员陈词 + 主管裁决，约1-2分钟）…</div>';
+  try{
+    const d = await jget(`/api/debate/${m}/${c}`);
+    const j = d.judge || {};
+    $('debateResult').innerHTML =
+      `<div><span class="badge">多空辩论</span> ${esc(d.code)} · 收盘 ${d.last_close}
+        · 裁决: <b class="stance-${esc(j.verdict)}">${esc(j.verdict)}</b>
+        (置信度 ${j.confidence}%)</div>
+      <div class="debate-cols">
+        <div class="bullside"><b style="color:var(--up)">🐂 多头论据</b>
+          <ul class="orders">${(d.bull||[]).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>
+        <div class="bearside"><b style="color:var(--down)">🐻 空头论据</b>
+          <ul class="orders">${(d.bear||[]).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>
+      </div>
+      <table style="margin-top:8px">
+        <tr><th>裁决依据</th><td>${esc(j.key_reason)}</td></tr>
+        <tr><th>操作提示</th><td>${esc(j.action_hint)}</td></tr>
+        <tr><th>失效条件</th><td class="dim">${esc(j.invalidation)}</td></tr>
+      </table>
+      <div class="disclaimer">${esc(d.disclaimer)}</div>`;
+  }catch(e){ $('debateResult').innerHTML = '辩论失败: ' + esc(e.message); }
+}
 
 /* ---------- ⑤ 持仓顾问 ---------- */
 const MK = {a:'A股', hk:'港股', us:'美股'};
@@ -505,16 +590,34 @@ async function loadPaper(){
     const s = await jget('/api/paper');
     if(s.msg){ $('paperResult').innerHTML = esc(s.msg); return; }
     const cls = v => v >= 0 ? 'num-up' : 'num-down';
+    DAY.paper = {days:s['交易日数'], diff:s['累计差额(建议-不动)'],
+                 gate:s['实盘门槛(>=20日&累计为正&胜率>50%)']};
+    renderDaybar();
     $('paperResult').innerHTML =
       `<div>起始 ${esc(s.start_date)} (初始市值 ${s['初始市值']}) · 已结算 <b>${s['交易日数']}</b> 个交易日
         · 当前净值 <b>${s['当前净值']}</b> vs 持有不动 <b>${s['持有不动净值']}</b>
         · 累计差额 <b class="${cls(s['累计差额(建议-不动)'])}">${s['累计差额(建议-不动)']}</b>
         · 日胜/平/负 ${s['日胜/平/负'].join('/')}
         · 实盘门槛: <b>${esc(s['实盘门槛(>=20日&累计为正&胜率>50%)'])}</b></div>
+      <div id="paperChart" style="width:100%;height:230px;margin-top:8px"></div>
       <table style="margin-top:8px"><thead><tr><th>日期</th><th>净值</th><th>持有不动</th><th>累计差额</th></tr></thead>
       <tbody>${s.curve.slice(-15).map(h=>`<tr><td>${h.date}</td><td>${h.equity}</td>
         <td>${h.bh}</td><td class="${cls(h.diff)}">${h.diff}</td></tr>`).join('')}</tbody></table>
       <div class="disclaimer">模拟盘不计手续费/滑点; 达到门槛(≥20日且累计为正且胜率>50%)之前, 建议仅作人工参考。</div>`;
+    const pc = echarts.init($('paperChart'));
+    pc.setOption({backgroundColor:'transparent',
+      tooltip:{trigger:'axis'},
+      legend:{data:['执行建议','持有不动'], textStyle:{color:'#8a93a5'}, top:0},
+      grid:{left:80,right:20,top:28,bottom:24},
+      xAxis:{type:'category', data:s.curve.map(h=>h.date),
+             axisLine:{lineStyle:{color:'#555'}}},
+      yAxis:{scale:true, axisLine:{lineStyle:{color:'#555'}},
+             splitLine:{lineStyle:{color:'#222835'}}},
+      series:[{name:'执行建议', type:'line', data:s.curve.map(h=>h.equity),
+               symbol:'circle', lineStyle:{color:'#4c8dff'}, itemStyle:{color:'#4c8dff'}},
+              {name:'持有不动', type:'line', data:s.curve.map(h=>h.bh),
+               symbol:'circle', lineStyle:{color:'#8a93a5', type:'dashed'},
+               itemStyle:{color:'#8a93a5'}}]});
   }catch(e){ $('paperResult').innerHTML = '加载失败: ' + esc(e.message); }
 }
 

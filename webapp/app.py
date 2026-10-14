@@ -81,6 +81,17 @@ def api_advise(market, code):
         return jsonify({"error": str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {e}"}), 502
 
 
+@app.get("/api/debate/<market>/<code>")
+def api_debate(market, code):
+    if market not in ("a", "hk", "us"):
+        return jsonify({"error": "market须为a/hk/us"}), 400
+    refresh = request.args.get("refresh") == "1"
+    try:
+        return jsonify(advisor.debate(market, code, refresh=refresh))
+    except Exception as e:
+        return jsonify({"error": str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {e}"}), 502
+
+
 @app.get("/api/overview")
 def api_overview():
     refresh = request.args.get("refresh") == "1"
