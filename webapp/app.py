@@ -14,9 +14,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import advisor  # noqa: E402
+import bottom_window  # noqa: E402
 import evaluator  # noqa: E402
 import market_service  # noqa: E402
 import news_service  # noqa: E402
+import paper_trader  # noqa: E402
 import portfolio  # noqa: E402
 
 app = Flask(__name__)
@@ -139,6 +141,33 @@ def api_report():
         return jsonify(_json.load(f))
 
 
+@app.get("/api/bottom/<market>/<code>")
+def api_bottom(market, code):
+    if market not in ("a", "hk", "us"):
+        return jsonify({"error": "market须为a/hk/us"}), 400
+    try:
+        return jsonify(bottom_window.analyze(market, code))
+    except Exception as e:
+        return jsonify({"error": str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {e}"}), 502
+
+
+@app.get("/api/paper")
+def api_paper():
+    try:
+        return jsonify(paper_trader.stats())
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 502
+
+
+@app.post("/api/paper/run")
+def api_paper_run():
+    d = (request.get_json(silent=True) or {}).get("date")
+    try:
+        return jsonify(paper_trader.run_day(d))
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 502
+
+
 def _scheduler():
     """内建定时器(此环境无cron): 工作日9:36后出持仓方案, 15:07后收盘复盘。"""
     import datetime as dt
@@ -165,6 +194,10 @@ def _scheduler():
                 done.add((today, "e"))
                 try:
                     evaluator.run(today)
+                except Exception:
+                    pass
+                try:
+                    paper_trader.run_day(today)
                 except Exception:
                     pass
         _t.sleep(60)

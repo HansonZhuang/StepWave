@@ -159,6 +159,30 @@
     <div id="report" class="loading">选择日期后查看…</div>
   </div>
 </section>
+<!-- ⑦ 谷底观察窗 + 模拟盘 -->
+<section>
+  <h2>⑦ 谷底观察窗 + 模拟盘战绩</h2>
+  <div class="card">
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <select id="bmarket">
+        <option value="a">A股</option><option value="hk">港股</option>
+        <option value="us">美股</option>
+      </select>
+      <input id="bcode" placeholder="代码: 如 920725" style="width:140px">
+      <button onclick="loadBottom()">计算观察窗</button>
+      <span class="dim" style="align-self:center">三依据: 本股历史下跌笔持续分位 / 斐波那契时间窗 / ABC时间比例。输出是"概率密集区"不是预测日期, 窗内必须等背驰/底分型确认</span>
+    </div>
+    <div id="bottomResult" style="margin-top:10px"></div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+      <span class="badge">模拟盘</span>
+      <span class="dim">每日建议在虚拟账户自动成交(只执行15:00前生成的方案, 不计手续费), 积累"是否值得实盘"的统计证据</span>
+      <button style="margin-left:auto" onclick="loadPaper()">刷新</button>
+    </div>
+    <div id="paperResult" class="loading">加载模拟盘战绩中…</div>
+  </div>
+</section>
 </main>
 
 <div id="modal" onclick="this.style.display='none'">
@@ -447,6 +471,53 @@ async function loadReport(gen){
 }
 $('rdate').value = new Date().toISOString().slice(0,10);
 
+/* ---------- ⑦ 谷底观察窗 + 模拟盘 ---------- */
+async function loadBottom(){
+  const m = $('bmarket').value, c = $('bcode').value.trim();
+  if(!c) return;
+  $('bottomResult').innerHTML = '<div class="loading">计算中…</div>';
+  try{
+    const d = await jget(`/api/bottom/${m}/${c}`);
+    if(d.error){ $('bottomResult').innerHTML = esc(d.error); return; }
+    const sw = d['时间窗_历史笔分位'], fb = d['时间窗_斐波那契'], abc = d['时间窗_ABC比例'];
+    $('bottomResult').innerHTML =
+      `<div><span class="badge">${esc(d.code)}</span> ${esc(d.last_dt)} 收盘 ${d.last_close}
+        · 状态: <b>${esc(d['当前状态'])}</b>
+        ${d.divergence_now ? ` · <b style="color:#d9a441">⚠ ${esc(d.divergence_now)}</b>` : ''}</div>
+      <table style="margin-top:8px">
+        ${sw ? `<tr><th>历史笔分位窗</th><td>当前下跌笔自 ${esc(sw['当前下跌笔起点'])} 已走 ${sw['已持续交易日']} 交易日
+          (历史P25/50/75=${sw['历史下跌笔P25/P50/P75'].join('/')}, 样本${sw['样本数']})<br>
+          <b>观察窗: ${sw['窗口(日历日期)'][0]} ~ ${sw['窗口(日历日期)'][1]}</b> · ${esc(sw['解读'])}</td></tr>` : ''}
+        ${fb ? `<tr><th>斐波时间窗</th><td>重要顶 ${esc(fb['重要顶'])}, 距今 ${fb['距今交易日']} 交易日<br>
+          ${(fb['将到达的斐波时间位']||[]).map(x=>`第${x['第N根K线']}根K线 ≈ <b>${x['约在']}</b>`).join(' · ') || '斐波时间位已走完'}</td></tr>` : ''}
+        ${abc ? `<tr><th>ABC时间比例</th><td>${esc(abc['A浪'])} · C浪已走 ${abc['C浪已走']} 交易日<br>
+          C=1.0A 到期 ≈ <b>${abc['C=1.0A 到期']}</b> · C=1.618A 到期 ≈ <b>${abc['C=1.618A 到期']}</b></td></tr>` : ''}
+        <tr><th>价格底候选</th><td>${d['价格底候选'].map(p=>`${esc(p['依据'])}: <b>${p['价位']}</b>`).join('<br>')}</td></tr>
+        <tr><th>确认要求</th><td class="dim">${esc(d['确认信号要求'])}</td></tr>
+      </table>
+      <div class="disclaimer">${esc(d['声明'])}</div>`;
+  }catch(e){ $('bottomResult').innerHTML = '计算失败: ' + esc(e.message); }
+}
+$('bcode').addEventListener('keydown', e => { if(e.key==='Enter') loadBottom(); });
+
+async function loadPaper(){
+  try{
+    const s = await jget('/api/paper');
+    if(s.msg){ $('paperResult').innerHTML = esc(s.msg); return; }
+    const cls = v => v >= 0 ? 'num-up' : 'num-down';
+    $('paperResult').innerHTML =
+      `<div>起始 ${esc(s.start_date)} (初始市值 ${s['初始市值']}) · 已结算 <b>${s['交易日数']}</b> 个交易日
+        · 当前净值 <b>${s['当前净值']}</b> vs 持有不动 <b>${s['持有不动净值']}</b>
+        · 累计差额 <b class="${cls(s['累计差额(建议-不动)'])}">${s['累计差额(建议-不动)']}</b>
+        · 日胜/平/负 ${s['日胜/平/负'].join('/')}
+        · 实盘门槛: <b>${esc(s['实盘门槛(>=20日&累计为正&胜率>50%)'])}</b></div>
+      <table style="margin-top:8px"><thead><tr><th>日期</th><th>净值</th><th>持有不动</th><th>累计差额</th></tr></thead>
+      <tbody>${s.curve.slice(-15).map(h=>`<tr><td>${h.date}</td><td>${h.equity}</td>
+        <td>${h.bh}</td><td class="${cls(h.diff)}">${h.diff}</td></tr>`).join('')}</tbody></table>
+      <div class="disclaimer">模拟盘不计手续费/滑点; 达到门槛(≥20日且累计为正且胜率>50%)之前, 建议仅作人工参考。</div>`;
+  }catch(e){ $('paperResult').innerHTML = '加载失败: ' + esc(e.message); }
+}
+
 /* ---------- 启动 ---------- */
 window.addEventListener('resize', ()=>chart.resize());
 (async function(){
@@ -456,6 +527,7 @@ window.addEventListener('resize', ()=>chart.resize());
   loadOverview();
   loadAdvices();
   loadPortfolio();
+  loadPaper();
 })();
 </script>
 </body>
