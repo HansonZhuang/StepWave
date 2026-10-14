@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>每日股市观察台</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  :root { --bg:#0e1117; --card:#171b24; --line:#2a3040; --txt:#d8dee9;
+          --dim:#8a93a5; --up:#e05858; --down:#3cb371; --acc:#4c8dff; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--txt);
+         font:14px/1.6 "PingFang SC","Microsoft YaHei",sans-serif; }
+  header { padding:14px 24px; border-bottom:1px solid var(--line);
+           display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:20px; }
+  header .dim { color:var(--dim); font-size:12px; }
+  main { max-width:1200px; margin:0 auto; padding:16px; }
+  section { margin-bottom:28px; }
+  h2 { font-size:16px; border-left:4px solid var(--acc); padding-left:10px;
+       margin-bottom:12px; }
+  .card { background:var(--card); border:1px solid var(--line);
+          border-radius:8px; padding:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr));
+          gap:12px; }
+  .newsitem { padding:8px 0; border-bottom:1px dashed var(--line); cursor:pointer; }
+  .newsitem:last-child { border-bottom:none; }
+  .newsitem:hover .t { color:var(--acc); }
+  .t { font-weight:600; }
+  .impact { color:#d9a441; font-size:12px; }
+  .meta { color:var(--dim); font-size:12px; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:10px;
+           font-size:12px; background:#243049; color:var(--acc); margin-right:6px; }
+  .star { color:#d9a441; }
+  .stance-偏多 { color:var(--up); } .stance-偏空 { color:var(--down); }
+  .stance-中性 { color:#d9a441; }
+  input,select,button { background:#10141c; color:var(--txt);
+      border:1px solid var(--line); border-radius:6px; padding:7px 10px; font-size:14px; }
+  button { cursor:pointer; background:var(--acc); border:none; color:#fff; }
+  button:hover { opacity:.85; }
+  .tabs { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .tab { padding:6px 14px; border:1px solid var(--line); border-radius:6px;
+         cursor:pointer; }
+  .tab.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+  #chart { width:100%; height:460px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; }
+  th { color:var(--dim); font-weight:normal; }
+  .num-up { color:var(--up); } .num-down { color:var(--down); }
+  .loading { color:var(--dim); padding:16px; }
+  #modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none;
+           align-items:center; justify-content:center; z-index:9; }
+  #modal .inner { background:var(--card); max-width:640px; width:92%;
+      max-height:80vh; overflow:auto; border-radius:10px; padding:20px;
+      border:1px solid var(--line); }
+  .disclaimer { color:var(--dim); font-size:12px; margin-top:8px; }
+  .quotebar { display:flex; gap:18px; flex-wrap:wrap; margin-bottom:10px;
+              font-size:13px; }
+  .orders li { margin-left:18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>每日股市观察台</h1>
+  <span class="dim" id="today"></span>
+  <span class="dim">数据: 新浪/财联社/东财公开接口 · 分析: 缠论+波浪+LLM · 仅供参考，不构成投资建议</span>
+</header>
+<main>
+
+<!-- ① 新闻 -->
+<section>
+  <h2>① 今日要闻与大势研判</h2>
+  <div class="card" id="newsSummary"><div class="loading">加载新闻研判中…</div></div>
+  <div style="margin:12px 0; display:flex; gap:8px;">
+    <input id="q" placeholder="搜索当日新闻: 如 石油 / 伊朗 / 降息 / 002491" style="flex:1">
+    <button onclick="doSearch()">搜索</button>
+    <button onclick="loadNews(true)" style="background:#2a3040">重新采集</button>
+  </div>
+  <div id="searchResult"></div>
+  <div class="grid" id="newsCats"><div class="loading">加载分类新闻中…</div></div>
+</section>
+
+<!-- ② 走势 -->
+<section>
+  <h2>② 关注股票走势（约30秒自动刷新现价）</h2>
+  <div class="card">
+    <div class="tabs" id="tabs">
+      {% for s in watchlist %}
+      <div class="tab" data-market="{{s.market}}" data-code="{{s.code}}"
+           onclick="pickStock(this)">{{s.name}} {{s.code}}</div>
+      {% endfor %}
+    </div>
+    <div class="quotebar" id="quotebar"></div>
+    <div id="chart"></div>
+    <div class="meta" id="chartMeta"></div>
+  </div>
+</section>
+
+<!-- ③ 买卖点位 -->
+<section>
+  <h2>③ 当日买卖点位建议（关注列表）</h2>
+  <div class="card">
+    <table id="adviceTable">
+      <thead><tr><th>股票</th><th>动作</th><th>建议仓位</th><th>挂单点位</th>
+      <th>止损</th><th>一句话逻辑</th></tr></thead>
+      <tbody><tr><td colspan="6" class="loading">逐只生成建议中（首次约1-2分钟）…</td></tr></tbody>
+    </table>
+    <div class="disclaimer">点位由中枢上下沿 / 笔端点 / 斐波那契位推导 + 模型综合，仅供参考。</div>
+  </div>
+</section>
+
+<!-- ④ 总体研判与个股查询 -->
+<section>
+  <h2>④ 总体研判 + 任意个股当日建议</h2>
+  <div class="card" id="overview"><div class="loading">生成大盘总体研判中…</div></div>
+  <div class="card" style="margin-top:12px">
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <select id="qmarket">
+        <option value="a">A股</option><option value="hk">港股</option>
+        <option value="us">美股</option>
+      </select>
+      <input id="qcode" placeholder="输入代码: 如 600519 / 00700 / NVDA">
+      <button onclick="queryStock()">分析该股</button>
+      <span class="dim" style="align-self:center">拉取近18个月K线 → 缠论/波浪结构 → 结合新闻与大盘出当日建议（约30-60秒）</span>
+    </div>
+    <div id="queryResult" style="margin-top:12px"></div>
+  </div>
+</section>
+<!-- ⑤ 持仓顾问 -->
+<section>
+  <h2>⑤ 我的持仓 · 当日操作方案</h2>
+  <div class="card">
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+      <select id="pmarket">
+        <option value="a">A股</option><option value="hk">港股</option>
+        <option value="us">美股</option>
+      </select>
+      <input id="pcode" placeholder="代码: 如 920725" style="width:140px">
+      <input id="pshares" placeholder="持有股数" style="width:110px" type="number">
+      <input id="pcost" placeholder="成本价(可选)" style="width:120px" type="number" step="0.01">
+      <button onclick="addHolding()">添加/更新持仓</button>
+      <button onclick="adviseAll()" style="background:#2a7a4b">生成全部持仓方案</button>
+    </div>
+    <div id="plist" class="loading">加载持仓中…</div>
+    <div id="padvices"></div>
+    <div class="disclaimer">方案由缠论/波浪结构+新闻+大盘+历史复盘教训(先验)综合生成, 模拟研判仅供参考, 不构成投资建议。</div>
+  </div>
+</section>
+
+<!-- ⑥ 当日复盘 -->
+<section>
+  <h2>⑥ 收盘复盘: 执行建议 vs 持有不动</h2>
+  <div class="card">
+    <div style="display:flex; gap:8px; margin-bottom:10px; align-items:center;">
+      <input id="rdate" type="date" style="width:160px">
+      <button onclick="loadReport(true)">生成/刷新复盘</button>
+      <span class="dim">每个交易日15:05自动生成; 盈亏为日内口径(未计手续费), 挂单按限价成交规则模拟</span>
+    </div>
+    <div id="report" class="loading">选择日期后查看…</div>
+  </div>
+</section>
+</main>
+
+<div id="modal" onclick="this.style.display='none'">
+  <div class="inner" onclick="event.stopPropagation()" id="modalInner"></div>
+</div>
+
+<script>
+document.getElementById('today').textContent = new Date().toLocaleDateString('zh-CN');
+const $ = id => document.getElementById(id);
+const esc = s => (s||'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function jget(url){
+  const r = await fetch(url);
+  if(!r.ok){
+    const text = await r.text();
+    try{ throw new Error(JSON.parse(text).error || text); }
+    catch(e){ throw (e instanceof SyntaxError) ? new Error(text) : e; }
+  }
+  return r.json();
+}
+
+/* ---------- ① 新闻 ---------- */
+let NEWS = null;
+function newsItemHtml(it){
+  return `<div class="newsitem" onclick='showNews(${JSON.stringify(it.hash)})'>
+    <div class="t">${'★'.repeat(it.importance)} ${esc(it.title)}</div>
+    <div class="impact">影响: ${esc(it.impact)}</div>
+    <div class="meta">${esc(it.source)} · ${esc(it.time)}</div></div>`;
+}
+async function loadNews(refresh){
+  $('newsSummary').innerHTML = '<div class="loading">加载新闻研判中…</div>';
+  $('newsCats').innerHTML = '<div class="loading">加载分类新闻中…(首次LLM分析约1分钟)</div>';
+  try{
+    NEWS = await jget('/api/news' + (refresh ? '?refresh=1' : ''));
+    const s = NEWS.summary || {};
+    $('newsSummary').innerHTML =
+      `<div><span class="badge">当日研判</span><b class="stance-${esc(s.stance)}">${esc(s.stance)}</b>
+       <span class="dim">(${NEWS.date} · 共${NEWS.n_items}条)</span></div>
+       <p style="margin:6px 0">${esc(s.summary)}</p>
+       <p><b>总体建议:</b> ${esc(s.advice)}</p>
+       <p class="meta">盯住: ${(s.watch||[]).map(esc).join(' ｜ ')}</p>`;
+    $('newsCats').innerHTML = NEWS.categories.map(c =>
+      `<div class="card"><div style="margin-bottom:6px"><span class="badge">${esc(c.name)}</span>
+       <span class="meta">${c.count}条</span></div>${c.top.map(newsItemHtml).join('')}</div>`).join('');
+  }catch(e){ $('newsCats').innerHTML = `<div class="card">新闻加载失败: ${esc(e.message)}</div>`; }
+}
+function showNews(hash){
+  const it = (NEWS.items||[]).find(x=>x.hash===hash); if(!it) return;
+  $('modalInner').innerHTML =
+    `<h3 style="margin-bottom:8px">${esc(it.title)}</h3>
+     <div class="meta">${esc(it.source)} · ${esc(it.time)} · 类别:${esc(it.category)} · 重要性:${'★'.repeat(it.importance)}</div>
+     <p style="margin:10px 0">${esc(it.content)}</p>
+     <p class="impact"><b>对股票的影响:</b> ${esc(it.impact)}</p>
+     ${it.url ? `<p><a href="${esc(it.url)}" target="_blank" style="color:var(--acc)">原文链接</a></p>` : ''}`;
+  $('modal').style.display = 'flex';
+}
+async function doSearch(){
+  const q = $('q').value.trim(); if(!q){ $('searchResult').innerHTML=''; return; }
+  $('searchResult').innerHTML = '<div class="card loading">搜索中…</div>';
+  const hits = await jget('/api/news/search?q=' + encodeURIComponent(q));
+  $('searchResult').innerHTML = `<div class="card" style="margin-bottom:12px">
+    <div class="meta">「${esc(q)}」命中 ${hits.length} 条</div>
+    ${hits.map(newsItemHtml).join('') || '<div class="dim">无结果</div>'}</div>`;
+}
+$('q').addEventListener('keydown', e => { if(e.key==='Enter') doSearch(); });
+
+/* ---------- ② 走势图 ---------- */
+const chart = echarts.init($('chart'));
+let CUR = null;
+const WATCH = [{% for s in watchlist %}{market:'{{s.market}}',code:'{{s.code}}',name:'{{s.name}}'},{% endfor %}];
+function sinaSym(m,c){ return m==='a' ? (c[0]==='6'?'sh':'sz')+c : m==='hk' ? 'rt_hk'+c : 'gb_'+c.toLowerCase(); }
+async function pickStock(el){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+  el.classList.add('on');
+  CUR = {market: el.dataset.market, code: el.dataset.code};
+  await drawStock(CUR.market, CUR.code);
+}
+async function drawStock(market, code, targetChart){
+  const c = targetChart || chart;
+  c.showLoading({textColor:'#d8dee9', maskColor:'rgba(14,17,23,.7)'});
+  try{
+    const d = await jget(`/api/stock/${market}/${code}`);
+    c.hideLoading();
+    const dates = d.bars.map(b=>b.date);
+    const kdata = d.bars.map(b=>[b.open,b.close,b.low,b.high]);
+    const strokeLine = (d.chan.strokes||[]).map(p=>[p.dt, p.price]);
+    const markAreas = (d.chan.zhongshu||[]).map(z=>[
+      {xAxis:z.start_dt, yAxis:z.zd, itemStyle:{color:'rgba(76,141,255,.14)',
+        borderColor:'rgba(76,141,255,.6)', borderWidth:1}},
+      {xAxis:z.end_dt, yAxis:z.zg}]);
+    const markPoints = (d.chan.signals||[]).map(s=>({
+      coord:[s.dt, s.price], value:s.type.replace('(提示)',''),
+      itemStyle:{color:'#d9a441'}}));
+    c.setOption({
+      backgroundColor:'transparent',
+      tooltip:{trigger:'axis', axisPointer:{type:'cross'}},
+      grid:{left:60,right:20,top:20,bottom:60},
+      xAxis:{type:'category', data:dates, axisLine:{lineStyle:{color:'#555'}}},
+      yAxis:{scale:true, axisLine:{lineStyle:{color:'#555'}},
+             splitLine:{lineStyle:{color:'#222835'}}},
+      dataZoom:[{type:'inside',start:55,end:100},{type:'slider',start:55,end:100,
+        backgroundColor:'#171b24', dataBackground:{areaStyle:{color:'#243049'}}}],
+      series:[
+        {name:'K线', type:'candlestick', data:kdata,
+         itemStyle:{color:'#e05858',color0:'#3cb371',
+                    borderColor:'#e05858',borderColor0:'#3cb371'},
+         markArea:{silent:true, data:markAreas},
+         markPoint:{data:markPoints, symbolSize:46,
+                    label:{fontSize:10, color:'#000'}}},
+        {name:'笔', type:'line', data:strokeLine, symbol:'circle', symbolSize:5,
+         lineStyle:{color:'#d9a441', width:1.4}, itemStyle:{color:'#d9a441'},
+         connectNulls:true}]
+    }, true);
+    if(!targetChart){
+      const z = (d.chan.zhongshu||[]).slice(-1)[0];
+      $('chartMeta').textContent =
+        `数据源:${d.source} · ${d.bars.length}根K线 · 蓝框=缠论中枢` +
+        (z ? ` · 最近中枢[${z.zd}, ${z.zg}]` : '') +
+        (d.chan.divergence ? ` · ⚠ ${d.chan.divergence}` : '');
+    }
+    return d;
+  }catch(e){ c.hideLoading(); if(!targetChart) $('chartMeta').textContent = '加载失败: ' + e.message; }
+}
+async function refreshQuotes(){
+  try{
+    const syms = WATCH.map(w=>sinaSym(w.market,w.code)).join(',');
+    const qs = await jget('/api/quote?symbols=' + syms);
+    $('quotebar').innerHTML = qs.map(q=>{
+      const cls = q.change_pct >= 0 ? 'num-up' : 'num-down';
+      return `<span><b>${esc(q.name)}</b>
+        <span class="${cls}">${q.price} (${q.change_pct>0?'+':''}${q.change_pct}%)</span></span>`;
+    }).join('');
+  }catch(e){ /* 静默重试 */ }
+}
+
+/* ---------- ③ 建议表 ---------- */
+async function loadAdvices(){
+  const rows = [];
+  for(const w of WATCH){
+    try{
+      const d = await jget(`/api/advise/${w.market}/${w.code}`);
+      const a = d.advice;
+      rows.push(`<tr><td>${esc(w.name)} ${esc(w.code)}</td>
+        <td><b>${esc(a.action)}</b></td><td>${a.position_pct}%</td>
+        <td><ul class="orders">${(a.orders||[]).map(o=>
+          `<li>${esc(o.side)} @ <b>${o.price}</b> <span class="dim">${esc(o.reason)}</span></li>`).join('')}</ul></td>
+        <td>${a.stop_loss ?? '-'}</td><td class="dim">${esc(a.rationale)}</td></tr>`);
+    }catch(e){
+      rows.push(`<tr><td>${esc(w.name)}</td><td colspan="5" class="dim">生成失败: ${esc(e.message).slice(0,80)}</td></tr>`);
+    }
+    document.querySelector('#adviceTable tbody').innerHTML =
+      rows.join('') || '<tr><td colspan="6" class="loading">…</td></tr>';
+  }
+}
+
+/* ---------- ④ 总体研判与个股查询 ---------- */
+async function loadOverview(){
+  try{
+    const d = await jget('/api/overview');
+    const o = d.overview;
+    $('overview').innerHTML =
+      `<div><span class="badge">大盘总研判</span>
+        <b class="stance-${esc(o.stance)}">${esc(o.stance)}</b>
+        · 建议总仓位 <b>${o.position_pct}%</b>
+        ${o.clear_all ? ' · <b style="color:var(--down)">⚠ 提示大面积清仓</b>' : ''}</div>
+       <p style="margin:6px 0"><b>上证:</b> ${esc(o.sh_view)}</p>
+       <p style="margin:6px 0"><b>纳指:</b> ${esc(o.ixic_view)}</p>
+       <p style="margin:6px 0">${esc(o.logic)}</p>
+       <p><b>今日要点:</b></p><ul class="orders">${(o.actions||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>
+       <div class="disclaimer">${esc(d.disclaimer)}</div>`;
+  }catch(e){ $('overview').innerHTML = '总研判生成失败: ' + esc(e.message); }
+}
+async function queryStock(){
+  const m = $('qmarket').value, c = $('qcode').value.trim();
+  if(!c) return;
+  $('queryResult').innerHTML = '<div class="loading">拉取数据并分析中（约30-60秒）…</div>';
+  try{
+    const d = await jget(`/api/advise/${m}/${c}`);
+    const a = d.advice;
+    $('queryResult').innerHTML =
+      `<div class="quotebar">${d.quote ? `<b>${esc(d.quote.name)}</b>
+         现价 ${d.quote.price} (${d.quote.change_pct>0?'+':''}${d.quote.change_pct}%)` : ''}</div>
+       <table><tr><th>动作</th><td><b>${esc(a.action)}</b> · 建议仓位 ${a.position_pct}%</td></tr>
+       <tr><th>波浪视角</th><td>${esc(a.wave_view)}</td></tr>
+       <tr><th>缠论视角</th><td>${esc(a.chan_view)}</td></tr>
+       <tr><th>消息面</th><td>${esc(a.news_view)}</td></tr>
+       <tr><th>挂单点位</th><td><ul class="orders">${(a.orders||[]).map(o=>
+         `<li>${esc(o.side)} @ <b>${o.price}</b> <span class="dim">${esc(o.reason)}</span></li>`).join('')}</ul></td></tr>
+       <tr><th>止损</th><td>${a.stop_loss ?? '-'}</td></tr>
+       <tr><th>结论</th><td>${esc(a.rationale)}</td></tr></table>
+       <div id="qchart" style="width:100%;height:380px;margin-top:10px"></div>
+       <div class="disclaimer">${esc(d.disclaimer)}</div>`;
+    const qc = echarts.init($('qchart'));
+    await drawStock(m, c, qc);
+  }catch(e){ $('queryResult').innerHTML = '分析失败: ' + esc(e.message); }
+}
+$('qcode').addEventListener('keydown', e => { if(e.key==='Enter') queryStock(); });
+
+/* ---------- ⑤ 持仓顾问 ---------- */
+const MK = {a:'A股', hk:'港股', us:'美股'};
+async function loadPortfolio(){
+  const h = await jget('/api/portfolio');
+  $('plist').innerHTML = h.length ? `<table><thead><tr><th>市场</th><th>代码</th>
+    <th>持有股数</th><th>成本价</th><th></th></tr></thead><tbody>` +
+    h.map(it=>`<tr><td>${MK[it.market]}</td><td>${esc(it.code)}</td>
+      <td>${it.shares}</td><td>${it.cost ?? '-'}</td>
+      <td><button style="background:#2a3040" onclick="adviseOne('${it.market}','${it.code}')">出方案</button>
+          <button style="background:#5a2a2a" onclick="delHolding('${it.market}','${it.code}')">删除</button></td></tr>`).join('')
+    + '</tbody></table>' : '<div class="dim">暂无持仓, 在上方添加</div>';
+}
+async function addHolding(){
+  const body = {market:$('pmarket').value, code:$('pcode').value.trim(),
+                shares:$('pshares').value, cost:$('pcost').value};
+  if(!body.code || !body.shares) return alert('请填代码和股数');
+  const r = await fetch('/api/portfolio', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if(!r.ok) return alert(await r.text());
+  loadPortfolio();
+}
+async function delHolding(m,c){
+  await fetch(`/api/portfolio/${m}/${c}`, {method:'DELETE'});
+  loadPortfolio();
+}
+function holdingCard(d){
+  const a = d.advice, q = d.quote || {};
+  return `<div class="card" style="margin-top:10px">
+    <div><span class="badge">${esc(d.name)} ${esc(d.code)}</span>
+      持有 <b>${d.shares}</b> 股
+      ${q.price ? ` · 现价 <b>${q.price}</b> (${q.change_pct>0?'+':''}${q.change_pct}%)` : ''}
+      · 动作: <b style="color:#d9a441">${esc(a.action)}</b>
+      · 建议保留 <b>${a.keep_shares}</b> 股</div>
+    <table style="margin-top:8px">
+      <tr><th>挂单</th><td><ul class="orders">${(a.orders||[]).map(o=>
+        `<li>${esc(o.side)} <b>${o.shares}</b> 股 @ <b>${o.price}</b>
+         <span class="dim">${esc(o.reason)}</span></li>`).join('') || '<li class="dim">今日不操作</li>'}</ul></td></tr>
+      <tr><th>后续加仓价</th><td>${a.add_price ?? '-'}</td></tr>
+      <tr><th>清仓触发价</th><td>${a.exit_price ?? '-'}</td></tr>
+      <tr><th>止损</th><td>${a.stop_loss ?? '-'}</td></tr>
+      <tr><th>波浪</th><td class="dim">${esc(a.wave_view)}</td></tr>
+      <tr><th>缠论</th><td class="dim">${esc(a.chan_view)}</td></tr>
+      <tr><th>消息面</th><td class="dim">${esc(a.news_view)}</td></tr>
+      <tr><th>结论</th><td>${esc(a.rationale)}</td></tr>
+    </table></div>`;
+}
+async function adviseOne(m,c){
+  $('padvices').insertAdjacentHTML('afterbegin',
+    `<div class="loading" id="ld_${m}_${c}">生成 ${c} 方案中(约30-60秒)…</div>`);
+  try{
+    const d = await jget(`/api/portfolio/advise/${m}/${c}`);
+    $(`ld_${m}_${c}`).outerHTML = holdingCard(d);
+  }catch(e){ $(`ld_${m}_${c}`).outerHTML = `<div class="card" style="margin-top:10px">
+    ${esc(c)} 方案生成失败: ${esc(e.message)}</div>`; }
+}
+async function adviseAll(){
+  const h = await jget('/api/portfolio');
+  $('padvices').innerHTML = '';
+  for(const it of h) await adviseOne(it.market, it.code);
+}
+
+/* ---------- ⑥ 收盘复盘 ---------- */
+async function loadReport(gen){
+  const d = $('rdate').value || new Date().toISOString().slice(0,10);
+  $('report').innerHTML = '<div class="loading">复盘计算中…</div>';
+  try{
+    const r = await jget(`/api/report?date=${d}` + (gen ? '&generate=1' : ''));
+    const cls = v => v >= 0 ? 'num-up' : 'num-down';
+    $('report').innerHTML =
+      `<div><span class="badge">${r.date}</span> <b>${esc(r.verdict)}</b>
+        · 执行建议盈亏 <b class="${cls(r.total_plan_pl)}">${r.total_plan_pl}</b>
+        vs 持有不动 <b class="${cls(r.total_hold_pl)}">${r.total_hold_pl}</b>
+        · 差额 <b class="${cls(r.diff)}">${r.diff}</b> 元</div>
+      <table style="margin-top:8px"><thead><tr><th>股票</th><th>当日OHLC</th>
+        <th>建议动作</th><th>模拟成交</th><th>执行盈亏</th><th>不动盈亏</th><th>差额</th></tr></thead><tbody>` +
+      r.rows.map(x => x.skip ?
+        `<tr><td>${esc(x.code)}</td><td colspan="6" class="dim">${esc(x.skip)}</td></tr>` :
+        `<tr><td>${esc(x.name)} ${esc(x.code)}</td>
+         <td class="dim">${x.ohlc.join(' / ')}</td><td>${esc(x.action)}</td>
+         <td>${x.fills.map(f=>`${f.side}${f.shares}@${f.price}${f.filled?'✓':'✗未成交'}`).join('<br>') || '-'}</td>
+         <td class="${cls(x.plan_pl)}">${x.plan_pl}</td>
+         <td class="${cls(x.hold_pl)}">${x.hold_pl}</td>
+         <td class="${cls(x.diff)}">${x.diff}</td></tr>`).join('') +
+      `</tbody></table>
+      ${r.new_lessons && r.new_lessons.length ? `<p style="margin-top:8px"><b>新增教训(已写入先验知识库):</b></p>
+        <ul class="orders">${r.new_lessons.map(l=>`<li>${esc(l)}</li>`).join('')}</ul>` : ''}
+      <div class="disclaimer">${esc(r.note)}</div>`;
+  }catch(e){ $('report').innerHTML = '复盘失败: ' + esc(e.message); }
+}
+$('rdate').value = new Date().toISOString().slice(0,10);
+
+/* ---------- 启动 ---------- */
+window.addEventListener('resize', ()=>chart.resize());
+(async function(){
+  refreshQuotes(); setInterval(refreshQuotes, 30000);
+  pickStock(document.querySelector('.tab'));
+  loadNews(false);
+  loadOverview();
+  loadAdvices();
+  loadPortfolio();
+})();
+</script>
+</body>
+</html>

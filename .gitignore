@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+nohup.out
+
+# 个人数据: 持仓/行情落盘/新闻/分析缓存/日志 一律不入库
+data/
+
+# 个人复盘教训(含真实交易记录), 用 lessons.example.md 作模板
+knowledge/lessons.md
+
+# 本机专用启动配置
+start_local.sh
