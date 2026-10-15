@@ -1,6 +1,6 @@
 <div align="center">
 
-# 📈 Stock Insight
+# 🌊 StepWave
 
 **会自我复盘的股票分析工作台**
 
@@ -67,7 +67,7 @@ flowchart LR
 ## 🚀 快速开始
 
 ```bash
-git clone https://github.com/HansonZhuang/stock-insight.git && cd stock-insight
+git clone https://github.com/HansonZhuang/StepWave.git && cd StepWave
 
 # 1. 环境（推荐 uv）
 uv venv .venv --python 3.11
